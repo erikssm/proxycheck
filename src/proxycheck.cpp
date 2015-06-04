@@ -71,7 +71,7 @@ inline char *GetPortFromIP(char *ipStr)
 	{
 		if (*p == ':')
 		{
-			*p = 0x0;
+			*p = 0;
 			return ++p;
 		}
 		p++;
@@ -158,7 +158,8 @@ void *CheckProxies(void *arg)
 		pthread_mutex_lock(&mtx);
 		if (s_proxyList[k][0] != 0)
 		{
-			strcpy(proxy, s_proxyList[k]);
+			proxy[1024] = 0;
+			strncpy(proxy, s_proxyList[k], 1023);
 			s_proxyList[k][0] = 0;
 			pthread_mutex_unlock(&mtx);
 		}
