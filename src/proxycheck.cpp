@@ -110,34 +110,33 @@ inline int ConnectNonBlocking(struct sockaddr_in sa, int sock, int timeout)
 		if (errno != EINPROGRESS)
 			return -1;
 
-	if (ret == 0)    //then connect succeeded right away
-		goto done;
-
-	//we are waiting for connect to complete now
-	if ((ret = select(sock + 1, &rset, &wset, NULL, (timeout) ? &ts : NULL)) < 0)
-		return -1;
-	if (ret == 0)
-	{   //we had a timeout
-		errno = ETIMEDOUT;
-		return -1;
-	}
-
-	//we had a positivite return so a descriptor is ready
-	if (FD_ISSET(sock, &rset) || FD_ISSET(sock, &wset))
+	if (ret != 0)    //then connect succeeded right away
 	{
-		if (getsockopt(sock, SOL_SOCKET, SO_ERROR, &error, &len) < 0)
+		//we are waiting for connect to complete now
+		if ((ret = select(sock + 1, &rset, &wset, NULL, (timeout) ? &ts : NULL)) < 0)
 			return -1;
-	}
-	else
-		return -1;
+		if (ret == 0)
+		{   //we had a timeout
+			errno = ETIMEDOUT;
+			return -1;
+		}
 
-	if (error)
-	{  //check if we had a socket error
-		errno = error;
-		return -1;
-	}
+		//we had a positivite return so a descriptor is ready
+		if (FD_ISSET(sock, &rset) || FD_ISSET(sock, &wset))
+		{
+			if (getsockopt(sock, SOL_SOCKET, SO_ERROR, &error, &len) < 0)
+				return -1;
+		}
+		else
+			return -1;
 
-	done:
+		if (error)
+		{  //check if we had a socket error
+			errno = error;
+			return -1;
+		}
+
+	}
 	//put socket back in blocking mode
 	if (fcntl(sock, F_SETFL, flags) < 0)
 	{
