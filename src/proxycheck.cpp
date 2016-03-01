@@ -10,18 +10,44 @@
 #include <arpa/inet.h>
 #include <fcntl.h>
 #include <pthread.h>
+#include <stdarg.h> // va_start
 
-#define ADDRESS 		"127.0.0.1"
-#define PORT			631
-#define REMOTE_HOST		"http://www.ipchicken.com"
-#define CONN_TIMEOUT	2
-#define THREAD_COUNT	30
+//#define ADDRESS 		"127.0.0.1"
+//#define PORT			631
+#define REMOTE_URL		"http://www.ipchicken.com/"
+#define REMOTE_HOST		"www.ipchicken.com"
+#define USER_AGENT      "Mozilla/5.0 (Windows NT 6.3; Trident/7.0; rv:11.0) like Gecko"
+#define CONN_TIMEOUT	5
+#define THREAD_COUNT	60
 
-const char msg[] = "GET " REMOTE_HOST "/ HTTP/1.1\r\nHost: " REMOTE_HOST "\r\nConnection: close\r\n\r\n";
+const char msg[] = "GET " REMOTE_URL " HTTP/1.1" \
+    "\r\nHost: " REMOTE_HOST \
+    "\r\nUser-Agent: " USER_AGENT \
+	"\r\nAccept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8" \
+	"\r\nConnection: keep-alive\r\n\r\n";
 
 static size_t s_Len = 0;
 static char **s_proxyList;
 static pthread_mutex_t mtx;
+
+/**
+ * Print debug message
+ */
+void DebugPrint(const char *format, ...)
+{
+    va_list args;
+    va_start(args, format);
+    char buff[1024]; // get rid of this hard-coded buffer
+    char tmp[1024];
+
+    snprintf(tmp, 1023, "%s", format);
+    vsnprintf(buff, 1023, tmp, args);
+    va_end(args);
+
+    pthread_mutex_lock(&mtx);
+	printf("%s \n", buff);
+	pthread_mutex_unlock(&mtx);
+}
 
 /**
  * Read proxy txt file into array
@@ -107,8 +133,12 @@ inline int ConnectNonBlocking(struct sockaddr_in sa, int sock, int timeout)
 
 	//initiate non-blocking connect
 	if ((ret = connect(sock, (struct sockaddr *) &sa, 16)) < 0)
+	{
 		if (errno != EINPROGRESS)
+		{
 			return -1;
+		}
+	}
 
 	if (ret != 0)    //then connect succeeded right away
 	{
@@ -125,10 +155,14 @@ inline int ConnectNonBlocking(struct sockaddr_in sa, int sock, int timeout)
 		if (FD_ISSET(sock, &rset) || FD_ISSET(sock, &wset))
 		{
 			if (getsockopt(sock, SOL_SOCKET, SO_ERROR, &error, &len) < 0)
+			{
 				return -1;
+			}
 		}
 		else
+		{
 			return -1;
+		}
 
 		if (error)
 		{  //check if we had a socket error
@@ -140,7 +174,7 @@ inline int ConnectNonBlocking(struct sockaddr_in sa, int sock, int timeout)
 	//put socket back in blocking mode
 	if (fcntl(sock, F_SETFL, flags) < 0)
 	{
-		printf("Error: failed to put socket in blocking mode");
+		DebugPrint("Error: failed to put socket in blocking mode");
 		return -1;
 	}
 
@@ -152,6 +186,8 @@ inline int ConnectNonBlocking(struct sockaddr_in sa, int sock, int timeout)
  */
 void *CheckProxies(void *arg)
 {
+//	DebugPrint("New thread");
+
 	char proxy[1024];
 	for (size_t k = 0; k < s_Len; k++)
 	{
@@ -179,27 +215,34 @@ void *CheckProxies(void *arg)
 				*pos = '\0';
 		}
 
+		if( strlen(proxy) < 1 )
+		{
+			continue;
+		}
+
 		char *port = GetPortFromIP(proxy);
 		if (port == NULL)
+		{
+			DebugPrint("ERROR: could not get port from '%s'", proxy);
 			continue;
+		}
 
 		char *endPtr = NULL;
 		int portNo = (int) strtol(port, &endPtr, 10);
 		if (endPtr != NULL && *endPtr != 0)
 		{
-			printf("Error: failed to convert port to number (%s)\n", proxy);
+			DebugPrint("ERROR: failed to convert port to number (%s)", proxy);
 			continue;
 		}
 		char buff[1024];
-		sprintf(buff, "Connecting to %s:%d ", proxy, portNo);
+		sprintf(buff, "Connecting to %s:%d", proxy, portNo);
 
 		int sockfd = 0, n = 0;
-		char recvBuff[1024];
 		struct sockaddr_in serv_addr;
 
 		if ((sockfd = socket(AF_INET, SOCK_STREAM, 0)) < 0)
 		{
-			printf("%s :: Error : could not create socket (errno %d)\n", buff, errno);
+			DebugPrint("%s :: ERROR : could not create socket (errno %d)", buff, errno);
 			continue;
 		}
 
@@ -217,7 +260,7 @@ void *CheckProxies(void *arg)
 
 		if (err < 0)
 		{
-			printf("%s :: Error: failed to connect\n", buff);
+			DebugPrint("%s :: ERROR: failed to connect", buff);
 			close(sockfd);
 			continue;
 		}
@@ -225,25 +268,50 @@ void *CheckProxies(void *arg)
 		{
 			send(sockfd, msg, strlen(msg), 0);
 
-			memset(recvBuff, '0', sizeof(recvBuff));
-			n = read(sockfd, recvBuff, sizeof(recvBuff) - 1);
-			if ( n == EAGAIN ) // try again
-				n = read(sockfd, recvBuff, sizeof(recvBuff) - 1);
-
-			bool response = false;
-			while (n > 0)
+			char recvBuff[1200300];
+			memset(recvBuff, 0, sizeof(recvBuff));
+			n = 0;
+			int nRead = 0;
+			do
 			{
-				recvBuff[n] = 0;
-				if (strstr(recvBuff, "<title>IP Chicken"))
-					response = true;
+				n = read(sockfd, &recvBuff[nRead], sizeof(recvBuff) - n - 1);
+				if( n > 0)
+				{
+					nRead += n;
+				}
+			} while( n > 0 );
 
-				n = read(sockfd, recvBuff, sizeof(recvBuff) - 1);
+//			DebugPrint("\n\n\n\nReturned data: %s \n\n\n\n", recvBuff);
+
+			bool success = false;
+			if (strstr(recvBuff, "<title>IP Chicken"))
+			{
+				success = true;
 			}
-			if (response)
-				printf("%s :: success\n", buff);
 
-			if (n < 0)
-				printf("%s :: read error (%d) \n", buff, errno);
+			if (success)
+			{
+				DebugPrint("%s :: >>>>>>>>>>>>  success <<<<<<<<<<<<", buff);
+			}
+			else
+			{
+				if (n < 0)
+				{
+					if( errno == EAGAIN)
+					{
+						DebugPrint("%s :: timed out (error %d) ", buff, errno);
+					}
+					else
+					{
+						DebugPrint("%s :: read error (%d) ", buff, errno);
+					}
+				}
+				else // server returned data but not target website
+				{
+//					DebugPrint("Returned data: \n %s", recvBuff);
+					DebugPrint("%s :: returned unexpected content ", buff);
+				}
+			}
 
 			close(sockfd);
 		}
@@ -255,26 +323,28 @@ int main(int argc, char *argv[])
 {
 	if (argc != 2)
 	{
-		printf("Usage: proxycheck <proxylist.txt>\n");
+		DebugPrint("Usage: proxycheck <proxylist.txt>");
 		return 0;
 	}
 
 	s_proxyList = ReadFile(argv[1], &s_Len);
 
+	DebugPrint("Number of entries: %lu ", s_Len);
+
 	if (s_proxyList == NULL)
 	{
-		printf("Error: failed to read proxy file\n");
+		DebugPrint("Error: failed to read proxy file");
 		return 1;
 	}
 
 	pthread_mutex_init(&mtx, NULL);
 
 	pthread_t threads[THREAD_COUNT];
-	for (int i = 0; i < THREAD_COUNT; i++)
+	for (size_t i = 0; i < THREAD_COUNT && i < s_Len; i++)
 		pthread_create(&threads[i], NULL, &CheckProxies, NULL);
 
 	void *status;
-	for (int i = 0; i < THREAD_COUNT; i++)
+	for (size_t i = 0; i < THREAD_COUNT && i < s_Len; i++)
 		pthread_join(threads[i], &status);
 
 	pthread_mutex_destroy(&mtx);
