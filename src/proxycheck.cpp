@@ -11,6 +11,10 @@
 #include <fcntl.h>
 #include <pthread.h>
 #include <stdarg.h> // va_start
+#include <ctype.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
 
 //#define ADDRESS 		"127.0.0.1"
 //#define PORT			631
@@ -19,6 +23,8 @@
 #define USER_AGENT      "Mozilla/5.0 (Windows NT 6.3; Trident/7.0; rv:11.0) like Gecko"
 #define CONN_TIMEOUT	5
 #define THREAD_COUNT	60
+
+int g_quietFlag = 0;
 
 const char msg[] = "GET " REMOTE_URL " HTTP/1.1" \
     "\r\nHost: " REMOTE_HOST \
@@ -29,12 +35,18 @@ const char msg[] = "GET " REMOTE_URL " HTTP/1.1" \
 static size_t s_Len = 0;
 static char **s_proxyList;
 static pthread_mutex_t mtx;
+static char * s_fileName = NULL;
 
 /**
  * Print debug message
  */
 void DebugPrint(const char *format, ...)
 {
+	if(g_quietFlag)
+	{
+		return;
+	}
+
     va_list args;
     va_start(args, format);
     char buff[1024]; // get rid of this hard-coded buffer
@@ -291,7 +303,14 @@ void *CheckProxies(void *arg)
 
 			if (success)
 			{
-				DebugPrint("%s :: >>>>>>>>>>>>  success <<<<<<<<<<<<", buff);
+				if (g_quietFlag)
+				{
+					printf("%s:%d\n", proxy, portNo);
+				}
+				else
+				{
+					DebugPrint("%s :: >>>>>>>>>>>>  success <<<<<<<<<<<<", buff);
+				}
 			}
 			else
 			{
@@ -319,15 +338,61 @@ void *CheckProxies(void *arg)
 	return NULL;
 }
 
+void PrintHelp(const char * binName)
+{
+	printf("Usage: %s [-hq] FILE_NAME \n", binName ? binName : "proxycheck");
+	printf("   -h    print this help message\n");
+	printf("   -q    quiet, output only success IPs\n");
+}
+
+bool ParseArgs( int argc, char *argv[] )
+{
+	  int index;
+	  int c;
+
+	  opterr = 0;
+	  while ((c = getopt (argc, argv, "qh")) != -1)
+	    switch (c)
+	      {
+	      case 'h':
+	        return false;
+	      case 'q':
+	        g_quietFlag = 1;
+	        break;
+	      case '?':
+	        if (isprint (optopt))
+	          DebugPrint("Unknown option `-%c'.\n", optopt);
+	        else
+	          DebugPrint("Unknown option character `\\x%x'.\n", optopt);
+	        return false;
+	      default:
+	        return false;
+	      }
+
+	  for (index = optind; index < argc; index++)
+	  {
+	    s_fileName = strdup(argv[index]);
+	  }
+
+	  if( !s_fileName )
+	  {
+		  return false;
+	  }
+
+	  return true;
+}
+
 int main(int argc, char *argv[])
 {
-	if (argc != 2)
+	if (!ParseArgs(argc, argv))
 	{
-		DebugPrint("Usage: proxycheck <proxylist.txt>");
+		PrintHelp(argv[0]);
 		return 0;
 	}
 
-	s_proxyList = ReadFile(argv[1], &s_Len);
+	DebugPrint("Source file: '%s'", s_fileName);
+
+	s_proxyList = ReadFile(s_fileName, &s_Len);
 
 	DebugPrint("Number of entries: %lu ", s_Len);
 
