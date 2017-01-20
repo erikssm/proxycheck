@@ -1,4 +1,4 @@
 # proxycheck
-Fast http proxy checker
+Fast threaded http proxy checker
 
-Tested in Ubuntu linux 14.04
+Tested in Ubuntu linux 14.04,16.04
