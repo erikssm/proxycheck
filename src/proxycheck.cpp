@@ -421,11 +421,13 @@ int main( int argc, char *argv[] )
             threads[i].join();
         }
 
-    } catch ( std::exception& ex )
+    }
+    catch ( std::exception& ex )
     {
         std::cerr << "error: " << ex.what() << std::endl;
         return 1;
-    } catch ( ... )
+    }
+    catch ( ... )
     {
         std::cerr << "unknown error" << std::endl;
         return 1;
