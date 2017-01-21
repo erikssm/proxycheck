@@ -5,6 +5,7 @@
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <mutex>
 #include <netinet/in.h>
 #include <netdb.h>
 #include <string.h> // strerror
@@ -12,6 +13,7 @@
 #include <stdarg.h> // va_start
 #include <string>
 #include <sstream>
+#include <thread>
 #include <sys/socket.h>
 #include <vector>
 #include <unistd.h>
@@ -33,14 +35,14 @@ const std::string message { "GET " + std::string {REMOTE_URL} + " HTTP/1.1" \
 };
 
 int CONN_TIMEOUT            = 5; // seconds
-unsigned THREAD_COUNT       = 60;
+unsigned THREAD_COUNT       = 1000;
 
 int g_quietFlag             = 0;
 
 using ProxyList             = std::vector<std::string>;
 ProxyList                   proxyList;
 
-pthread_mutex_t             mtx;
+std::mutex                  mtx;
 std::string                 proxyFile {};
 
 /**
@@ -62,9 +64,8 @@ void DebugPrint(const char *format, ...)
     vsnprintf(buff, 1023, tmp, args);
     va_end(args);
 
-    pthread_mutex_lock(&mtx);
+    std::lock_guard<std::mutex> lock { mtx };
 	printf("%s \n", buff);
-	pthread_mutex_unlock(&mtx);
 }
 
 /**
@@ -204,16 +205,23 @@ void *CheckProxies(void *arg)
 
 	while( true )
 	{
-		pthread_mutex_lock(&mtx);
-		if( proxyList.empty() )
-		{
-		    pthread_mutex_unlock(&mtx);
-		    break;
-		}
-		std::string proxy { proxyList.front() };
-        proxyList.erase( proxyList.begin() );
-		pthread_mutex_unlock(&mtx);
+	    std::string proxy;
 
+	    {
+	        std::lock_guard<std::mutex> lock { mtx };
+
+            if( proxyList.empty() )
+            {
+                break;
+            }
+            proxy = proxyList.front();
+            proxyList.erase( proxyList.begin() );
+	    }
+
+	    if( !proxy.length() )
+        {
+            continue;
+        }
 
 		// remove newlines, spaces
 		auto replace = [&]( const std::string what )
@@ -378,40 +386,33 @@ int main(int argc, char *argv[])
             return 1;
         }
 
-        pthread_mutex_init(&mtx, NULL);
-
-        pthread_t threads[THREAD_COUNT];
-        for (size_t i = 0; i < THREAD_COUNT && i < proxyList.size(); i++ )
+        std::thread threads[ THREAD_COUNT ];
+        size_t listSize { proxyList.size() };
+        for (size_t i = 0; i < THREAD_COUNT && i < listSize; i++ )
         {
-            pthread_create( &threads[i],
-                    NULL,
-                    [](void*)->void*
+            threads[ i ] = std::thread { []()
+                {
+                    try
                     {
-                        try
-                        {
-                            return CheckProxies( NULL );
-                        }
-                        catch (std::exception& e)
-                        {
-                            std::cerr << "thread error: " << e.what() << std::endl;
-                        }
-                        catch ( ... )
-                        {
-                            std::cerr << "unknown thread error"<< std::endl;
-                        }
-                        return NULL;
-                    },
-                    NULL
-            );
+                        CheckProxies( NULL );
+                    }
+                    catch (std::exception& e)
+                    {
+                        std::cerr << "thread error: " << e.what() << std::endl;
+                    }
+                    catch ( ... )
+                    {
+                        std::cerr << "unknown thread error"<< std::endl;
+                    }
+                }
+            };
         }
 
-        void *status;
-        for( size_t i = 0; i < THREAD_COUNT && i < proxyList.size(); i++ )
+        for( size_t i = 0; i < THREAD_COUNT && i < listSize; i++ )
         {
-            pthread_join( threads[i], &status );
+            threads[ i ].join();
         }
 
-        pthread_mutex_destroy(&mtx);
     }
     catch( std::exception& ex )
     {
